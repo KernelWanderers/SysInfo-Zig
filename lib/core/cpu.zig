@@ -4,7 +4,7 @@ const CPUData = struct {
     // Do note that this data may or may not be accurate,
     // depending on the current system in use.
     //
-    // For example, macOS provides a neat to check this:
+    // For example, macOS provides a neat way to check this:
     // `sysctl hw.cpufrequency`
     baseClockSpeed: u32,
 
