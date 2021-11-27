@@ -106,12 +106,10 @@ const SysInfoWMI = extern struct {
         property: []const u8,
         allocator: *Allocator,
     ) !?[]u8 {
-
         var pclsObj: ?*WMI.IWbemClassObject = null;
         var uReturn: u32 = 0;
         var hres: i32 = 0;
         var t: i32 = 0;
-        var result: ?[]u8 = null;
 
         while (true) {
             hres = enumerator.*.IEnumWbemClassObject_Next(
@@ -147,15 +145,12 @@ const SysInfoWMI = extern struct {
                     // Release the object after we're done using it.
                     uReturn = pclsObj.?.*.IUnknown_Release();
 
-                    result = utf8_str;
-                    break;
+                    return utf8_str;
                 } else |err| return err;
-
-                break;
             } else |err| return err;
         }
 
-        return result;
+        return null;
     }
 
     /// Runs the provided query in the current namespace `ROOT\\CIMV2`
@@ -180,9 +175,8 @@ const SysInfoWMI = extern struct {
         const WQL = stringToBSTR("WQL") catch null;
         const Query = stringToBSTR(search_query) catch null;
 
-        if (WQL == null or Query == null) {
+        if (WQL == null or Query == null)
             return null;
-        }
 
         // `flag` here should have a value of 16
         const flag = @enumToInt(WMI.WBEM_FLAG_RETURN_IMMEDIATELY);
