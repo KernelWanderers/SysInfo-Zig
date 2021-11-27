@@ -14,9 +14,6 @@ const SysInfoWMI = extern struct {
     ///     `allocator` - The allocator instance used to allocate the value to heap.
     ///
     /// Returns: A BSTR representation of the string.
-    ///
-    /// **NOTE**: You MUST free the value returned after you're done using it!
-    /// The library does not, and will not, do this automatically.
     pub fn stringToBSTR(
         str: []const u8,
     ) !?Foundation.BSTR {
@@ -85,7 +82,6 @@ const SysInfoWMI = extern struct {
         );
 
         const Namespace = stringToBSTR("ROOT\\CIMV2") catch null; // Default namespace?
-
 
         if (Namespace == null) { return null; }
 
