@@ -1,3 +1,7 @@
 zig-cache
 hardware_manager
 app
+.zigmod
+deps.zig
+*.exe
+*.pdb
