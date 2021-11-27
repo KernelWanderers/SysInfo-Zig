@@ -7,10 +7,21 @@ const Allocator = std.mem.Allocator;
 
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 
-const SysInfoWMI = extern struct {
+pub const SysInfoWMI = extern struct {
+    /// Property for when `initialiseIWbemServices()` is called,
+    /// to ensure it doesn't attempt to connect to the local namespace
+    /// more than a single time.
+    ///
+    /// It is thread safe due to the nature of `initialiseIWbemServices()`'s
+    /// internal handles. It uses `std.Thread.Mutex.lock()` to lock the declaration
+    /// for this value to a single thread, and unlock it afterwards.
+    pub var iwb_service: ?*WMI.IWbemServices = null;
+
+    var lock: std.Thread.Mutex = .{};
+
     /// Converts a "regular string" to a BSTR.
     ///
-    ///     `str`       - The string to convert.
+    ///     `str`  - The string to convert.
     ///
     /// Returns: A BSTR representation of the string.
     pub fn stringToBSTR(
@@ -36,6 +47,11 @@ const SysInfoWMI = extern struct {
         var pSvc: ?*WMI.IWbemServices = null;
         var hres: i32 = 0;
         var n: u16 = 0;
+
+        if (SysInfoWMI.iwb_service != null) return iwb_service;
+
+        @field(SysInfoWMI, "lock").lock();
+        defer @field(SysInfoWMI, "lock").unlock();
 
         hres = COM.CoInitializeEx(null, COM.COINIT_MULTITHREADED);
 
@@ -70,9 +86,7 @@ const SysInfoWMI = extern struct {
             @alignCast(@alignOf(WMI.IWbemLocator), pLoc),
         );
 
-        const Namespace = stringToBSTR("ROOT\\CIMV2") catch null; // Default namespace?
-
-        if (Namespace == null) return null;
+        const Namespace = stringToBSTR("ROOT\\CIMV2") catch return null; // Default namespace?
 
         hres = IWbemLocator.vtable.ConnectServer(
             IWbemLocator,
@@ -87,6 +101,8 @@ const SysInfoWMI = extern struct {
         );
 
         if (hres != 0) return null;
+
+        SysInfoWMI.iwb_service = pSvc;
 
         return pSvc;
     }
@@ -164,22 +180,14 @@ const SysInfoWMI = extern struct {
         pSvcArg: ?*WMI.IWbemServices,
     ) ?*WMI.IEnumWbemClassObject {
         var pEnumerator: ?*WMI.IEnumWbemClassObject = null;
-        var pSvc: ?*WMI.IWbemServices = pSvcArg;
+        var pSvc: ?*WMI.IWbemServices = pSvcArg orelse initialiseIWbemServices() orelse return null;
 
-        // In case the user doesn't provide
-        // a `IWbemServices` instance,
-        // create one.
-        if (pSvcArg == null)
-            pSvc = initialiseIWbemServices();
-
-        const WQL = stringToBSTR("WQL") catch null;
-        const Query = stringToBSTR(search_query) catch null;
-
-        if (WQL == null or Query == null)
-            return null;
+        const WQL = stringToBSTR("WQL") catch return null;
+        const Query = stringToBSTR(search_query) catch return null;
 
         // `flag` here should have a value of 16
         const flag = @enumToInt(WMI.WBEM_FLAG_RETURN_IMMEDIATELY);
+
         const hres = pSvc.?.*.IWbemServices_ExecQuery(
             WQL, // WQL = WMI Query Language
             Query,
@@ -213,5 +221,28 @@ pub fn queryCPU() !void {
         return;
     }
 
+    defer gpa.allocator.free(value.?);
+
     try stdout.print("----{s}\n", .{value});
+}
+
+pub fn queryGPU() !void {
+    const stdout = std.io.getStdOut().writer();
+    const pEnumerator = SysInfoWMI.query("SELECT * FROM Win32_VideoController", null);
+
+    if (pEnumerator == null) {
+        try stdout.print("Failed query. Function returned `null`", .{});
+        return;
+    }
+
+    const value = SysInfoWMI.getItem(pEnumerator.?, "Name", &gpa.allocator) catch null;
+
+    if (value == null) {
+        try stdout.print("Failed to obtain 'Name' property of Win32_VideoController enumerator. Returned status code: 1", .{});
+        return;
+    }
+
+    defer gpa.allocator.free(value.?);
+
+    try stdout.print("====={s}\n", .{value});
 }
