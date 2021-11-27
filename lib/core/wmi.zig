@@ -5,13 +5,12 @@ const COM = win32.system.com;
 const Foundation = win32.foundation;
 const Allocator = std.mem.Allocator;
 
-pub var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 
 const SysInfoWMI = extern struct {
     /// Converts a "regular string" to a BSTR.
     ///
     ///     `str`       - The string to convert.
-    ///     `allocator` - The allocator instance used to allocate the value to heap.
     ///
     /// Returns: A BSTR representation of the string.
     pub fn stringToBSTR(
@@ -25,12 +24,8 @@ const SysInfoWMI = extern struct {
 
             if (Foundation.SysAllocString(utf16_str)) |bstr| {
                 return bstr;
-            } else {
-                return null;
-            }
-        } else |err| {
-            return err;
-        }
+            } else return null;
+        } else |err| return err;
     }
 
     /// Initialises a new `IWbemServices` instance by using `COM` and `WMI`
@@ -44,9 +39,7 @@ const SysInfoWMI = extern struct {
 
         hres = COM.CoInitializeEx(null, COM.COINIT_MULTITHREADED);
 
-        if (hres != 0) {
-            return null;
-        }
+        if (hres != 0) return null;
 
         hres = COM.CoInitializeSecurity(
             null,
@@ -60,9 +53,7 @@ const SysInfoWMI = extern struct {
             null,
         );
 
-        if (hres != 0) {
-            return null;
-        }
+        if (hres != 0) return null;
 
         hres = COM.CoCreateInstance(
             WMI.CLSID_WbemLocator,
@@ -72,9 +63,7 @@ const SysInfoWMI = extern struct {
             &pLoc,
         );
 
-        if (hres != 0) {
-            return null;
-        }
+        if (hres != 0) return null;
 
         const IWbemLocator = @ptrCast(
             *WMI.IWbemLocator,
@@ -83,7 +72,7 @@ const SysInfoWMI = extern struct {
 
         const Namespace = stringToBSTR("ROOT\\CIMV2") catch null; // Default namespace?
 
-        if (Namespace == null) { return null; }
+        if (Namespace == null) return null;
 
         hres = IWbemLocator.vtable.ConnectServer(
             IWbemLocator,
@@ -97,9 +86,7 @@ const SysInfoWMI = extern struct {
             &pSvc,
         );
 
-        if (hres != 0) {
-            return null;
-        }
+        if (hres != 0) return null;
 
         return pSvc;
     }
@@ -139,9 +126,7 @@ const SysInfoWMI = extern struct {
                 &uReturn,
             );
 
-            if (uReturn == 0) {
-                break;
-            }
+            if (uReturn == 0) break;
 
             var prop: COM.VARIANT = undefined;
 
@@ -169,14 +154,10 @@ const SysInfoWMI = extern struct {
 
                     result = utf8_str;
                     break;
-                } else |err| {
-                    return err;
-                }
+                } else |err| return err;
 
                 break;
-            } else |err| {
-                return err;
-            }
+            } else |err| return err;
         }
 
         return result;
@@ -198,19 +179,20 @@ const SysInfoWMI = extern struct {
         // In case the user doesn't provide
         // a `IWbemServices` instance,
         // create one.
-        if (pSvcArg == null) {
+        if (pSvcArg == null)
             pSvc = initialiseIWbemServices();
-        }
 
         const WQL = stringToBSTR("WQL") catch null;
         const Query = stringToBSTR(search_query) catch null;
 
-        if (WQL == null or Query == null) { return null; }
+        if (WQL == null or Query == null) {
+            return null;
+        }
 
         // `flag` here should have a value of 16
         const flag = @enumToInt(WMI.WBEM_FLAG_RETURN_IMMEDIATELY);
         const hres = pSvc.?.*.IWbemServices_ExecQuery(
-            WQL,    // WQL = WMI Query Language
+            WQL, // WQL = WMI Query Language
             Query,
             flag,
             null,
@@ -219,9 +201,7 @@ const SysInfoWMI = extern struct {
 
         // In case the search wasn't successful,
         // return null.
-        if (hres != 0) {
-            return null;
-        }
+        if (hres != 0) return null;
 
         return pEnumerator;
     }
