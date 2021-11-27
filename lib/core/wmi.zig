@@ -102,15 +102,10 @@ const SysInfoWMI = extern struct {
     /// **NOTE**: You MUST free the value allocated to heap after you've finished using it! 
     /// The library does not do this automatically.
     pub fn getItem(
-        enumerator: ?*WMI.IEnumWbemClassObject,
+        enumerator: *WMI.IEnumWbemClassObject,
         property: []const u8,
         allocator: *Allocator,
     ) !?[]u8 {
-
-        // ...I don't know, user-error, or something.
-        if (enumerator == null) {
-            return null;
-        }
 
         var pclsObj: ?*WMI.IWbemClassObject = null;
         var uReturn: u32 = 0;
@@ -119,7 +114,7 @@ const SysInfoWMI = extern struct {
         var result: ?[]u8 = null;
 
         while (true) {
-            hres = enumerator.?.*.IEnumWbemClassObject_Next(
+            hres = enumerator.*.IEnumWbemClassObject_Next(
                 @enumToInt(WMI.WBEM_INFINITE),
                 1,
                 @ptrCast([*]?*WMI.IWbemClassObject, &pclsObj),
@@ -211,7 +206,13 @@ const SysInfoWMI = extern struct {
 pub fn queryCPU() !void {
     const stdout = std.io.getStdOut().writer();
     const pEnumerator = SysInfoWMI.query("SELECT * FROM Win32_Processor", null);
-    const value = SysInfoWMI.getItem(pEnumerator, "Name", &gpa.allocator) catch null;
+
+    if (pEnumerator == null) {
+        try stdout.print("Failed query. Function returned `null`", .{});
+        return;
+    }
+
+    const value = SysInfoWMI.getItem(pEnumerator.?, "Name", &gpa.allocator) catch null;
 
     if (value == null) {
         try stdout.print("Failed to obtain 'Name' property of Win32_Processor enumerator. Returned status code: 1", .{});
