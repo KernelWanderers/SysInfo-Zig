@@ -1,4 +1,6 @@
-const CPUData = extern struct {
+const std = @import("std");
+
+const CPUData = extern union(enum) {
     /// The base clock speed of this CPU.
     ///
     /// Do note that this data may or may not be accurate,
@@ -23,7 +25,7 @@ const CPUData = extern struct {
     ///
     /// Special thanks to [CorpNewt](https://github.com/CorpNewt) who originally implemented the
     /// logic for scraping AMD's site.
-    codename: *const []u8,
+    codename: []const u8,
 
     /// The number of cores of this CPU.
     cores: u32,
@@ -37,7 +39,7 @@ const CPUData = extern struct {
     /// built-in instruction set detection.
     ///
     /// Aliases: `flags`
-    instructionSets: *const []const []u8,
+    instructionSets: std.ArrayList([]const u8),
 
     /// The available instruction sets for this CPU.
     ///
@@ -45,7 +47,7 @@ const CPUData = extern struct {
     /// built-in instruction set detection.
     ///
     /// Aliases: `instructionSets`
-    flags: *const []const []u8,
+    flags: std.ArrayList([]const u8),
 
     /// The maximum clock speed of this CPU.
     maxClockSpeed: u32,
@@ -61,10 +63,10 @@ const CPUData = extern struct {
     ///          - Zen
     ///          - Zen+ (Zen+ is a Zen variant with a larger L1 cache.)
     ///          - Zen2
-    microarchitecture: *const []u8,
+    microarchitecture: []const u8,
 
     /// The model of this CPU.
-    model: *const []u8,
+    model: []const u8,
 
     /// The number of logical processors (threads) of this CPU.
     threads: u32,

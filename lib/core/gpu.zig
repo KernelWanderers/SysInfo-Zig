@@ -1,4 +1,16 @@
-const GPUData = extern struct {
+const GPUData = extern union(enum) {
+    /// The ACPI path of this GPU device,
+    /// if possible to construct.
+    ///
+    /// Aliases: `acpiPath`
+    ACPI: ?[]const u8,
+
+    /// The ACPI path of this GPU device,
+    /// if possible to construct.
+    ///
+    /// Aliases: `acpiPath`
+    acpiPath: ?[]const u8,
+
     /// The codename of this GPU.
     ///      For the time being, NVidia/AMD GPus are only supported.
     ///
@@ -16,7 +28,7 @@ const GPUData = extern struct {
     /// Special thanks to:
     ///  - [khronokernel](https://github.com/khronokernel) — for allowing us to copy over their NVidia device IDs for Curie, Tesla, Fermi & Kepler cards in the first place.
     ///  - [Flagers](https://github.com/flagersgit) — for providing us with the AMD & NVidia GPU device IDs data.
-    codename: *const []u8,
+    codename: []const u8,
 
     /// The device ID of this GPU device in decimal.
     ///
@@ -29,7 +41,19 @@ const GPUData = extern struct {
     vendorID: u32,
 
     /// The model of this GPU.
-    model: *const []u8,
+    model: []const u8,
+
+    /// The PCI path of this GPU device,
+    /// if possible to construct.
+    ///
+    /// Aliases: `pciPath`
+    PCI: ?[]const u8,
+
+    /// The PCI path of this GPU device,
+    /// if possible to construct.
+    ///
+    /// Aliases: `PCI`
+    pciPath: ?[]const u8,
 
     /// The total amount of video RAM (VRAM) available for this GPU.
     ///
