@@ -6,8 +6,6 @@ const OLE = win32.system.ole;
 const Foundation = win32.foundation;
 const Allocator = std.mem.Allocator;
 
-var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-
 pub const SysInfoWMI = extern struct {
     /// Property for when `initialiseIWbemServices()` is called,
     /// to ensure it doesn't attempt to connect to the local namespace
@@ -20,30 +18,32 @@ pub const SysInfoWMI = extern struct {
 
     var lock: std.Thread.Mutex = .{};
 
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+
     // Enums' properties are sorted alphabetically.
 
     /// Union enum for storing type values
     /// of all the possible values a `COM.VARIANT` instance 
     /// could contain.
     pub const VariantElem = union(enum) {
-        AnyArray: ?*COM.SAFEARRAY,                       //  => 8192 + varType of elements' type.
-        Boolean: i16,                                   //   => 11
-        Byte: u8,                                      //    => 17
-        Currency: COM.CY,                             //     => 6
-        Date: f64,                                   //      => 7
-        Decimal: Foundation.DECIMAL,                //       => 14
-        Double: f64,                               //        => 5
-        EMPTY: void,                              //         => 0
-        ERROR: error{ERROR},                     //          => 10
-        Int: i32,                               //           => 2
-        Long: i32,                             //            => 3
-        LongLong: i64,                        //             => 20
-        NULL: void,                          //              => 1
-        ObjectRef: ?*c_void,                //               => 9
-        Single: i32,                       //                => 4
-        String: ?[]u8,                    //                 => 8  (This is actually ?BSTR, but we automatically convert.)
-        Variant: ?*COM.VARIANT,          //                  => 12
-        VariantNull: void,              //                   => 13
+        AnyArray: ?*COM.SAFEARRAY,                      //  => 8192 + varType of elements' type.
+        Boolean: i16,                                  //   => 11
+        Byte: u8,                                     //    => 17
+        Currency: COM.CY,                            //     => 6
+        Date: f64,                                  //      => 7
+        Decimal: Foundation.DECIMAL,               //       => 14
+        Double: f64,                              //        => 5
+        EMPTY: void,                             //         => 0
+        ERROR: error{ERROR},                    //          => 10
+        Int: i32,                              //           => 2
+        Long: i32,                            //            => 3
+        LongLong: i64,                       //             => 20
+        NULL: void,                         //              => 1
+        ObjectRef: ?*c_void,               //               => 9
+        Single: i32,                      //                => 4
+        String: ?[]u8,                   //                 => 8  (This is actually ?BSTR, but we automatically convert.)
+        Variant: ?*COM.VARIANT,         //                  => 12
+        VariantNull: void,             //                   => 13
     };
 
     /// Converts a UTF-16 string into UTF-8 using `std.unicode.utf16leToUtf8Alloc()`
@@ -86,6 +86,106 @@ pub const SysInfoWMI = extern struct {
         return self.convertUtf16ToUtf8(slice, allocator);
     }
 
+    /// Destructs the elements inside of a `SafeArray`
+    /// into a `StringHashMap`; which can contain any
+    /// element of type `VariantElem`.
+    ///
+    ///     `obj`       - The `IWbemClassObject` instance to obtain the data from.
+    ///     `safeArr`   - The `SafeArray` instance to iterate over.
+    ///     `allocator` - The allocator instance used to allocate the hashmap to heap.
+    ///
+    /// **Note**: The returned `StringHashMap` MUST be freed after
+    ///           you're done using it! The library does not, and cannot, do this automatically.
+    ///
+    /// **Returns**: A `StringHashMap` containing the values from the provided `SafeArray`.
+    pub fn destructSafeArray(
+        self: @This(),
+        obj: ?*WMI.IWbemClassObject,
+        safeArr: ?*COM.SAFEARRAY,
+        allocator: *Allocator,
+    ) std.StringHashMap(VariantElem) {
+        var map = std.StringHashMap(VariantElem).init(allocator);
+
+        var lUpper: i32 = 0;
+        var lLower: i32 = 0;
+        var propName: ?*c_void = null;
+        var propVal: COM.VARIANT = undefined;
+
+        if (OLE.SafeArrayGetUBound(safeArr, 1, &lUpper) != 0) 
+            return map;
+
+        if (OLE.SafeArrayGetLBound(safeArr, 1, &lLower) != 0)
+            return map;
+
+        var i: i32 = lLower;
+
+        while (i < lUpper) : (i += 1) {
+            var t: ?*i32 = null;
+
+            if (OLE.SafeArrayGetElement(safeArr, &i, &propName) != 0) continue;
+
+
+            var bstr: *Foundation.BSTR = @ptrCast(
+                *Foundation.BSTR,
+                @alignCast(@alignOf(Foundation.BSTR), propName.?),
+            );
+
+            const slice = std.mem.sliceTo(
+                @ptrCast([*:0]u16, bstr),
+                0,
+            );
+
+
+            if (obj.?.*.IWbemClassObject_Get(
+                slice,
+                0,
+                &propVal,
+                t,
+                t,
+            ) != 0) continue;
+
+            defer _ = OLE.VariantClear(&propVal);
+
+            if (std.unicode.utf16leToUtf8Alloc(&gpa.allocator, slice)) |propName_utf8| {
+                if (self.getElementVariant(propVal, &gpa.allocator) catch null) |val| 
+                    map.put(propName_utf8, val) catch continue;
+            } else |_| continue;
+        }
+
+        return map;
+    }
+
+    /// Executes a method based on its name and argument descriptions.
+    ///
+    ///     `path`      - The path to the parent `IWbemClassObject` which holds the method definition.
+    ///     `method`    - The name of the method to execute.
+    ///     `pInInst`   - The argument descriptions of the method.
+    ///
+    /// **Returns**: A pointer to an `IWbemClassObject` instance,
+    ///              which is the outputted value from the method.
+    pub fn execMethod(
+        self: @This(),
+        path: Foundation.BSTR,
+        method: Foundation.BSTR,
+        pInInst: ?*WMI.IWbemClassObject,
+    ) ?*WMI.IWbemClassObject {
+        _ = self;
+
+        var pOutInst: ?*WMI.IWbemClassObject = null;
+
+        if (iwb_service.?.*.IWbemServices_ExecMethod(
+            path,
+            method,
+            0,
+            null,
+            pInInst,
+            &pOutInst,
+            null
+        ) != 0) return null;
+
+        return pOutInst;
+    }
+
     /// Extracts the valid element from the Variant value
     /// based on the `vt` property--which indicates the type 
     /// of value allocated.
@@ -98,8 +198,8 @@ pub const SysInfoWMI = extern struct {
     /// **NOTE**: Do not forget to free the `String` value from memory if
     /// this value was returned!
     pub fn getElementVariant(
-        self: @This(), 
-        variant: COM.VARIANT, 
+        self: @This(),
+        variant: COM.VARIANT,
         allocator: *Allocator,
     ) !VariantElem {
         // Discarding reference to `self` so
@@ -146,29 +246,30 @@ pub const SysInfoWMI = extern struct {
     /// The library does not, nor can it, do this automatically.
     pub fn getItem(
         self: @This(),
-        enumerator: *WMI.IEnumWbemClassObject,
+        enumerator: ?*WMI.IEnumWbemClassObject,
+        obj: ?*WMI.IWbemClassObject,
         property: []const u8,
         allocator: *Allocator,
     ) !?VariantElem {
-        var pclsObj: ?*WMI.IWbemClassObject = null;
+        var pclsObj: ?*WMI.IWbemClassObject = obj;
         var uReturn: u32 = 0;
-        var hres: i32 = 0;
-
-        // Discarding reference to `self` so
-        // the compiler won't complain.
-        _ = self;
 
         while (true) {
             var t: i32 = 0;
 
-            if (enumerator.*.IEnumWbemClassObject_Next(
+            if (obj == null) {
+                if (enumerator == null) break;
+
+                if (enumerator.?.*.IEnumWbemClassObject_Next(
                     @enumToInt(WMI.WBEM_INFINITE),
                     1,
                     @ptrCast([*]?*WMI.IWbemClassObject, &pclsObj),
                     &uReturn,
                 ) != 0) return null;
 
-            if (uReturn == 0) break;
+                if (uReturn == 0) break;
+            }
+
 
             var prop: COM.VARIANT = undefined;
 
@@ -177,12 +278,12 @@ pub const SysInfoWMI = extern struct {
                 defer allocator.free(utf16_str);
 
                 if (pclsObj.?.*.IWbemClassObject_Get(
-                        utf16_str,
-                        0,
-                        &prop,
-                        &t,
-                        &t,
-                    ) != 0) return null;
+                    utf16_str,
+                    0,
+                    &prop,
+                    &t,
+                    &t,
+                ) != 0) return null;
 
                 defer _ = OLE.VariantClear(&prop);
                 defer _ = pclsObj.?.*.IUnknown_Release();
@@ -206,29 +307,28 @@ pub const SysInfoWMI = extern struct {
     /// The library does not, nor can it, do this automatically.
     pub fn getItems(
         self: @This(),
-        enumerator: *WMI.IEnumWbemClassObject,
+        enumerator: ?*WMI.IEnumWbemClassObject,
+        obj: ?*WMI.IWbemClassObject,
         allocator: *Allocator,
     ) std.ArrayList(std.StringHashMap(VariantElem)) {
         var array = std.ArrayList(std.StringHashMap(VariantElem)).init(allocator);
-        var map = std.StringHashMap(VariantElem).init(allocator);
-        var pclsObj: ?*WMI.IWbemClassObject = null;
+        var pclsObj: ?*WMI.IWbemClassObject = obj;
         var uReturn: u32 = 0;
         var hres: i32 = 0;
-        var t: ?*i32 = null;
 
-        // Discarding reference to `self` so
-        // the compiler won't complain.
-        _ = self;
+        if (obj == null) {
+            if (enumerator == null) return array;
 
-        hres = enumerator.*.IEnumWbemClassObject_Next(
-            @enumToInt(WMI.WBEM_INFINITE),
-            1,
-            @ptrCast([*]?*WMI.IWbemClassObject, &pclsObj),
-            &uReturn,
-        );
+            hres = enumerator.?.*.IEnumWbemClassObject_Next(
+                @enumToInt(WMI.WBEM_INFINITE),
+                1,
+                @ptrCast([*]?*WMI.IWbemClassObject, &pclsObj),
+                &uReturn,
+            );
 
-        if (hres != 0 or uReturn == 0) return array;
-
+            if (hres != 0 or uReturn == 0) return array;
+        }
+        
         var qualifier: ?*COM.VARIANT = null;
         var safe_arr: ?*COM.SAFEARRAY = null;
 
@@ -237,62 +337,77 @@ pub const SysInfoWMI = extern struct {
             0,
             qualifier,
             &safe_arr,
-            ) != 0) return array;
+        ) != 0) return array;
 
-        var lUpper: i32 = 0;
-        var lLower: i32 = 0;
-        var propName: ?*c_void = null;
-        var propVal: COM.VARIANT = undefined;
+        defer _ = pclsObj.?.*.IUnknown_Release();
 
-        if (OLE.SafeArrayGetUBound(safe_arr, 1, &lUpper) != 0) return array;
-
-        if (OLE.SafeArrayGetLBound(safe_arr, 1, &lLower) != 0) return array;
-
-        var i: i32 = lLower;
-
-        inline while (i < lUpper) : (i += 1) {
-            if (hres != 0) continue;
-
-            hres = OLE.SafeArrayGetElement(safe_arr, &i, &propName);
-
-            if (hres != 0) continue;
-
-            var bstr: *Foundation.BSTR = @ptrCast(
-                *Foundation.BSTR,
-                @alignCast(@alignOf(Foundation.BSTR), propName.?),
-            );
-
-            const slice = std.mem.sliceTo(
-                @ptrCast([*:0]u16, bstr),
-                0,
-            );
-
-            if (pclsObj.?.*.IWbemClassObject_Get(
-                    slice,
-                    0,
-                    &propVal,
-                    t,
-                    t,
-                ) != 0) continue;
-
-            defer _ = OLE.VariantClear(&propVal);
-
-            if (std.unicode.utf16leToUtf8Alloc(allocator, slice)) |propName_utf8| {
-                if (self.getElementVariant(propVal, allocator) catch null) |val| {
-                    map.put(propName_utf8, val) catch continue;
-                }
-            } else |_| continue;
-        }
-        
-        defer uReturn = pclsObj.?.*.IUnknown_Release();
-        
-        _ = array.append(map) catch return array;
+        _ = array.append(self.destructSafeArray(pclsObj, safe_arr, allocator)) catch return array;
 
         _ = OLE.SafeArrayDestroy(safe_arr);
 
-        _ = array.appendSlice((self.getItems(enumerator, allocator)).items) catch void;
+        _ = array.appendSlice((self.getItems(enumerator, null, allocator)).items) catch return array;
 
         return array;
+    }
+
+    /// Obtains an instance of the object
+    /// based on the provided path.
+    ///
+    ///     `path` - The path of the wanted object.
+    ///
+    /// **Returns**: A pointer to an `IWbemClassObject` instance, if possible.
+    pub fn getObjectInst(
+        self: @This(),
+        path: Foundation.BSTR,
+    ) ?*WMI.IWbemClassObject {
+        _ = self;
+
+        var obj: ?*WMI.IWbemClassObject = null;
+
+        if (iwb_service.?.*.IWbemServices_GetObject(
+            path, 
+            0, 
+            null, 
+            &obj, 
+            null,
+        ) != 0) return null;
+
+        return obj;
+    }
+
+    /// Obtains a method matching the provided method name.
+    ///
+    ///     `obj`  - The object from which to obtain the method.
+    ///     `name` - The name of the method to attempt to find.
+    ///
+    /// **Returns**: A pointer to an `IWbemClassObject` instance
+    ///              which matches the method's argument descriptions.
+    pub fn getMethod(
+        self: @This(),
+        obj: ?*WMI.IWbemClassObject,
+        name: Foundation.BSTR
+    ) ?*WMI.IWbemClassObject {
+        _ = self;
+
+        var pInClass: ?*WMI.IWbemClassObject = null;
+        var pInInst: ?*WMI.IWbemClassObject = null;
+
+        if (obj.?.*.IWbemClassObject_GetMethod(
+            std.mem.sliceTo(
+                @ptrCast([*:0]u16, name),
+                0
+            ),
+            0,
+            &pInClass,
+            null,
+        ) != 0) return null;
+
+        if (pInClass.?.*.IWbemClassObject_SpawnInstance(
+            0,
+            &pInInst,
+        ) != 0) return null;
+
+        return pInInst;
     }
 
     /// Initialises a new `IWbemServices` instance by using `COM` and `WMI`
@@ -312,28 +427,27 @@ pub const SysInfoWMI = extern struct {
         lock.lock();
         defer lock.unlock();
 
-        if (COM.CoInitializeEx(null, COM.COINIT_MULTITHREADED) != 0) return null; 
+        if (COM.CoInitializeEx(null, COM.COINIT_MULTITHREADED) != 0) return null;
 
         if (COM.CoInitializeSecurity(
-                null,
-                -1,
-                null,
-                null,
-                COM.RPC_C_AUTHN_LEVEL_DEFAULT,
-                COM.RPC_C_IMP_LEVEL_IMPERSONATE,
-                null,
-                COM.EOAC_NONE,
-                null,
-            ) != 0) return null;
-
+            null,
+            -1,
+            null,
+            null,
+            COM.RPC_C_AUTHN_LEVEL_DEFAULT,
+            COM.RPC_C_IMP_LEVEL_IMPERSONATE,
+            null,
+            COM.EOAC_NONE,
+            null,
+        ) != 0) return null;
 
         if (COM.CoCreateInstance(
-                WMI.CLSID_WbemLocator,
-                null,
-                COM.CLSCTX_INPROC_SERVER,
-                WMI.IID_IWbemLocator,
-                &pLoc,
-            ) != 0) return null;
+            WMI.CLSID_WbemLocator,
+            null,
+            COM.CLSCTX_INPROC_SERVER,
+            WMI.IID_IWbemLocator,
+            &pLoc,
+        ) != 0) return null;
 
         if (hres != 0) return null;
 
@@ -344,18 +458,18 @@ pub const SysInfoWMI = extern struct {
 
         // Use the provided namespace if possible,
         // otherwise, fallback to the default namespace for WMI objects.
-        const Namespace = self.stringToBSTR(namespace orelse "ROOT\\CIMV2") catch return null;
+        const Namespace = self.utf8ToBSTR(namespace orelse "ROOT\\CIMV2") catch return null;
 
         if (IWbemLocator.?.*.IWbemLocator_ConnectServer(
-                Namespace,
-                null,
-                null,
-                &n,
-                0,
-                &n,
-                null,
-                &pSvc,
-            ) != 0) return null;
+            Namespace,
+            null,
+            null,
+            &n,
+            0,
+            &n,
+            null,
+            &pSvc,
+        ) != 0) return null;
 
         iwb_service = pSvc;
 
@@ -370,15 +484,18 @@ pub const SysInfoWMI = extern struct {
     /// Returns: A reference to an `IEnumWbemClassObject` if successful. Otherwise, `null`.
     pub fn query(
         self: @This(),
-        search_query: []const u8,
+        searchQuery: []const u8,
         pSvcArg: ?*WMI.IWbemServices,
         namespace: ?[]u8,
     ) ?*WMI.IEnumWbemClassObject {
         var pEnumerator: ?*WMI.IEnumWbemClassObject = null;
         var pSvc: ?*WMI.IWbemServices = pSvcArg orelse self.initialiseIWbemServices(namespace orelse null) orelse return null;
 
-        const WQL = self.stringToBSTR("WQL") catch return null;
-        const Query = self.stringToBSTR(search_query) catch return null;
+        const WQL = self.utf8ToBSTR("WQL") catch return null;
+        const Query = self.utf8ToBSTR(searchQuery) catch return null;
+
+        defer Foundation.SysFreeString(WQL);
+        defer Foundation.SysFreeString(Query);
 
         // `flag` here should have a value of 16
         const flag = @enumToInt(WMI.WBEM_FLAG_RETURN_IMMEDIATELY);
@@ -421,68 +538,3 @@ pub const SysInfoWMI = extern struct {
         } else |err| return err;
     }
 };
-
-// Tests.
-pub fn queryCPU() !void {
-    const stdout = std.io.getStdOut().writer();
-    const _WMI: SysInfoWMI = .{};
-    const pEnumerator = _WMI.query("SELECT * FROM Win32_VideoController", null, null) orelse {
-        try stdout.print("Failed query. Function returned `null`", .{});
-        return;
-    };
-
-    const value = _WMI.getItem(pEnumerator, "Name", &gpa.allocator) catch null;
-
-    if (value == null) {
-        try stdout.print("Failed to obtain 'Name' property of Win32_Processor enumerator. Returned status code: 1", .{});
-        return;
-    }
-
-    switch (value.?) {
-        .String => |val| {
-            defer gpa.allocator.free(val.?);
-
-            try stdout.print("----{s}\n", .{val});
-        },
-
-        else => |val| try stdout.print("----{any}\n", .{val}),
-    }
-}
-
-pub fn queryGPU() !void {
-    const stdout = std.io.getStdOut().writer();
-    const _WMI: SysInfoWMI = .{};
-    const pEnumerator = _WMI.query("SELECT * FROM Win32_VideoController", null, null) orelse {
-        try stdout.print("Failed query. Function returned `null`", .{});
-        return;
-    };
-
-    var list = _WMI.getItems(pEnumerator, &gpa.allocator);
-
-    if (list.items.len == 0) {
-        try stdout.print("Failed to obtain 'Name' property of Win32_VideoController enumerator. Returned status code: 1", .{});
-        return;
-    }
-
-    defer list.deinit();
-
-    var i: usize = 0;
-
-    while (i < list.items.len) {
-        var itr = list.items[i].iterator();
-
-        while (itr.next()) |entry| {
-            switch (entry.value_ptr.*) {
-                .String => |val| {
-                    defer gpa.allocator.free(val.?);
-
-                    try stdout.print("Key: {s} | Value: {s}\n", .{ entry.key_ptr.*, val.? });
-                },
-                else => |val| try stdout.print("Key: {s} | Value: {s}\n", .{ entry.key_ptr.*, val }),
-            }
-        }
-
-        i += 1;
-    }
-
-}
