@@ -5,3 +5,4 @@ app
 deps.zig
 *.exe
 *.pdb
+.vscode
