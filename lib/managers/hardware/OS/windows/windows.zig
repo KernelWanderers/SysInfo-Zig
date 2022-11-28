@@ -74,7 +74,7 @@ pub const HardwareManager = extern struct {
     /// if something goes wrong.
     ///
     /// **NOTE**: if you do use this, you must free the
-    ///           newly provided `ArrayList` value from heap after you're 
+    ///           newly provided `ArrayList` value from heap after you're
     ///           done using it! The library doesn't, and can't, do this automatically.
     pub fn getKeys(
         self: @This(),
@@ -100,11 +100,11 @@ pub const HardwareManager = extern struct {
     }
 
     /// Obtains information about the current system's
-    /// CPU(s) in use. 
+    /// CPU(s) in use.
     ///
     ///     `allocator` - The allocator instance used to allocate the `ArrayList`
     ///                   and hashmap to heap.
-    /// 
+    ///
     /// **WARNING**: Haven't tested yet on dual processor setups...
     ///
     /// **Returns**: An `ArrayList` of `StringHashMap`, where each instance of
@@ -152,11 +152,11 @@ pub const HardwareManager = extern struct {
     }
 
     /// Obtains information about the current system's
-    /// CPU(s) in use. 
+    /// GPU(s) in use.
     ///
     ///     `allocator` - The allocator instance used to allocate
     ///                   the `ArrayList` and hashmap to heap.
-    /// 
+    ///
     /// **WARNING**: Haven't tested yet on dual processor setups...
     ///
     /// **Returns**: An `ArrayList` of `StringHashMap`, where each instance of
